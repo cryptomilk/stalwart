@@ -421,16 +421,18 @@ pub(crate) fn build_certified_key(cert: Vec<u8>, pk: Vec<u8>) -> Result<Certifie
     if cert.is_empty() {
         return Err("No certificates found.".to_string());
     }
-    let pk = match read_one(&mut Cursor::new(pk))
-        .map_err(|err| format!("Failed to read private keys.: {err}",))?
-        .into_iter()
-        .next()
-    {
-        Some(Item::Pkcs8Key(key)) => PrivateKeyDer::Pkcs8(key),
-        Some(Item::Pkcs1Key(key)) => PrivateKeyDer::Pkcs1(key),
-        Some(Item::Sec1Key(key)) => PrivateKeyDer::Sec1(key),
-        Some(_) => return Err("Unsupported private keys found.".to_string()),
-        None => return Err("No private keys found.".to_string()),
+    let mut cursor = Cursor::new(pk);
+    // Skip non-key PEM items (certificates, etc.) until we find a private key
+    let pk = loop {
+        match read_one(&mut cursor)
+            .map_err(|err| format!("Failed to read private keys: {err}"))?
+        {
+            Some(Item::Pkcs8Key(key)) => break PrivateKeyDer::Pkcs8(key),
+            Some(Item::Pkcs1Key(key)) => break PrivateKeyDer::Pkcs1(key),
+            Some(Item::Sec1Key(key)) => break PrivateKeyDer::Sec1(key),
+            Some(_) => continue,
+            None => return Err("No private keys found.".to_string()),
+        }
     };
 
     Ok(CertifiedKey {

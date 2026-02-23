@@ -226,18 +226,24 @@ impl Core {
 }
 
 pub fn build_rsa_keypair(pem: &str) -> Result<RsaKeyPair, String> {
-    match rustls_pemfile::read_one(&mut pem.as_bytes()) {
-        Ok(Some(rustls_pemfile::Item::Pkcs1Key(key))) => {
-            RsaKeyPair::from_der(key.secret_pkcs1_der())
-                .map_err(|err| format!("Failed to parse PKCS1 RSA key: {err}"))
+    let mut cursor = std::io::Cursor::new(pem.as_bytes());
+
+    // Skip non-key PEM items (certificates, etc.) until we find a private key
+    loop {
+        match rustls_pemfile::read_one(&mut cursor)
+            .map_err(|err| format!("Failed to read RSA key: {err}"))?
+        {
+            Some(rustls_pemfile::Item::Pkcs1Key(key)) => {
+                return RsaKeyPair::from_der(key.secret_pkcs1_der())
+                    .map_err(|err| format!("Failed to parse PKCS1 RSA key: {err}"));
+            }
+            Some(rustls_pemfile::Item::Pkcs8Key(key)) => {
+                return RsaKeyPair::from_pkcs8(key.secret_pkcs8_der())
+                    .map_err(|err| format!("Failed to parse PKCS8 RSA key: {err}"));
+            }
+            Some(_) => continue,
+            None => return Err("No RSA key found in PEM".to_string()),
         }
-        Ok(Some(rustls_pemfile::Item::Pkcs8Key(key))) => {
-            RsaKeyPair::from_pkcs8(key.secret_pkcs8_der())
-                .map_err(|err| format!("Failed to parse PKCS8 RSA key: {err}"))
-        }
-        Err(err) => Err(format!("Failed to read PEM: {err}")),
-        Ok(Some(key)) => Err(format!("Unsupported key type: {key:?}")),
-        Ok(None) => Err("No RSA key found in PEM".to_string()),
     }
 }
 
@@ -245,15 +251,23 @@ pub fn build_ecdsa_pem(
     alg: &'static ring::signature::EcdsaSigningAlgorithm,
     pem: &str,
 ) -> Result<EcdsaKeyPair, String> {
-    match rustls_pemfile::read_one(&mut pem.as_bytes()) {
-        Ok(Some(rustls_pemfile::Item::Pkcs8Key(key))) => EcdsaKeyPair::from_pkcs8(
-            alg,
-            key.secret_pkcs8_der(),
-            &ring::rand::SystemRandom::new(),
-        )
-        .map_err(|err| format!("Failed to parse PKCS8 ECDSA key: {err}")),
-        Err(err) => Err(format!("Failed to read PEM: {err}")),
-        Ok(Some(key)) => Err(format!("Unsupported key type: {key:?}")),
-        Ok(None) => Err("No ECDSA key found in PEM".to_string()),
+    let mut cursor = std::io::Cursor::new(pem.as_bytes());
+
+    // Skip non-key PEM items (certificates, etc.) until we find a private key
+    loop {
+        match rustls_pemfile::read_one(&mut cursor)
+            .map_err(|err| format!("Failed to read ECDSA key: {err}"))?
+        {
+            Some(rustls_pemfile::Item::Pkcs8Key(key)) => {
+                return EcdsaKeyPair::from_pkcs8(
+                    alg,
+                    key.secret_pkcs8_der(),
+                    &ring::rand::SystemRandom::new(),
+                )
+                .map_err(|err| format!("Failed to parse PKCS8 ECDSA key: {err}"));
+            }
+            Some(_) => continue,
+            None => return Err("No ECDSA key found in PEM".to_string()),
+        }
     }
 }
